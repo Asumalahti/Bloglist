@@ -2,8 +2,7 @@ const blogsRouter = require('express').Router();
 const Blog = require('../models/blog');
 const User = require('../models/user')
 const jwt = require('jsonwebtoken')
-const { tokenHelper } = require('../utils/tokenHelper');
-const { errorHandler } = require('../utils/middleware')
+const { errorHandler, authenticateToken, tokenExtractor } = require('../utils/middleware');
 blogsRouter.get('/', async (request, response) => {
   const blogs = await Blog
   .find({})
@@ -28,7 +27,7 @@ blogsRouter.get('/', async (request, response) => {
     }
   });
 
-  blogsRouter.post('/', authenticateToken, async (request, response, next) => {
+  blogsRouter.post('/', async (request, response, next) => {
     const { title, author, url, likes } = request.body;
   
     if (!title || !url) {
@@ -36,7 +35,13 @@ blogsRouter.get('/', async (request, response) => {
     }
   
     try {
-      const user = await User.findById(request.user.id); // User ID from token
+      const decodedToken = jwt.verify(request.token, process.env.JWT_SECRET);
+  
+      if (!decodedToken.id) {
+        return response.status(401).json({ error: 'Token invalid' });
+      }
+  
+      const user = await User.findById(decodedToken.id);
   
       if (!user) {
         return response.status(401).json({ error: 'Invalid user' });
@@ -59,32 +64,39 @@ blogsRouter.get('/', async (request, response) => {
       next(error);
     }
   });
-
-  blogsRouter.delete('/:id', async (request, response) => {
+  
+  blogsRouter.delete('/:id', authenticateToken, async (request, response, next) => {
     const { id } = request.params;
   
-      const result = await Blog.findByIdAndDelete(id);
-      if (!result) {
+    try {
+      const blog = await Blog.findById(id);
+  
+      if (!blog) {
         return response.status(404).json({ error: 'Blog not found' });
       }
-      response.sendStatus(204);
-    })
-
-    blogsRouter.put('/:id', async (request, response, next) => {
-      try {
-          const { title, author, url, likes } = request.body;
   
-          const blog = {
-              title,
-              author,
-              url,
-              likes,
-          };
-  
-          const updatedBlog = await Blog.findByIdAndUpdate(request.params.id, blog, { new: true });
-          response.json(updatedBlog);
-      } catch (error) {
-          next(error);
+      if (blog.user.toString() !== request.user.id) {
+        return response.status(403).json({ error: 'Not authorized to delete this blog' });
       }
+  
+      await Blog.findByIdAndDelete(id);
+      response.sendStatus(204);
+    } catch (error) {
+      next(error);
+    }
   });
-module.exports = blogsRouter;
+  
+  blogsRouter.put('/:id', authenticateToken, async (request, response, next) => {
+    const { title, author, url, likes } = request.body;
+  
+    const blog = { title, author, url, likes };
+  
+    try {
+      const updatedBlog = await Blog.findByIdAndUpdate(request.params.id, blog, { new: true });
+      response.json(updatedBlog);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  module.exports = blogsRouter;
